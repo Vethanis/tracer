@@ -156,13 +156,13 @@ int main(){
     const float invh2 = 2.0f / height;
     uint8_t* data = new uint8_t[width * height * 3];
     vec3 eye(0.0f, 0.0f, 1.0f);
-    vec3 light(1.0f, -1.0f, 0.0f);
+    vec3 light(1.0f, 1.0f, 0.0f);
     
     size_t i = 0;
     for(int32_t y = 0; y < height; y++){
         for(int32_t x = 0; x < width; x++){
             const float xf = x * invw2 - 1.0f;
-            const float yf = y * invh2 - 1.0f;
+            const float yf = -1.0f * (y * invh2 - 1.0f);
             do_ray(&data[i], eye, light, xf, yf);
             i += 3;
         }
