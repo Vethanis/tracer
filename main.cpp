@@ -6,7 +6,7 @@
 #include <random>
 #include <thread>
 
-#include "tiny_jpeg.h"
+#include "lodepng.h"
 
 using namespace std;
 
@@ -138,11 +138,11 @@ float operator - (const MapSample& a, const MapSample& b){
 }
 
 static Material materials[] = {
-    {vec3(0.5f, 0.5f, 0.5f), vec3(0.001f, 0.001f, 0.001f)}, // white
-    {vec3(0.5f, 0.0f, 0.0f), vec3(0.001f, 0.0f, 0.0f)}, // red
-    {vec3(0.0f, 0.5f, 0.0f), vec3(0.0f, 0.001f, 0.0f)}, // green
-    {vec3(0.0f, 0.0f, 0.5f), vec3(0.0f, 0.0f, 0.001f)}, // blue
-    {vec3(0.0f, 0.0f, 0.0f), vec3(0.5f, 0.5f, 0.5f)} // white light
+    {vec3(0.9f, 0.9f, 0.9f), vec3(0.0f, 0.0f, 0.0f)}, // white
+    {vec3(0.9f, 0.1f, 0.1f), vec3(0.0f, 0.0f, 0.0f)}, // red
+    {vec3(0.1f, 0.9f, 0.1f), vec3(0.0f, 0.0f, 0.0f)}, // green
+    {vec3(0.1f, 0.1f, 0.9f), vec3(0.0f, 0.0f, 0.0f)}, // blue
+    {vec3(0.0f, 0.0f, 0.0f), vec3(0.9f, 0.9f, 0.9f)} // white light
 };
 
 MapSample sphere(const vec3& ray, const vec3& location, float radius, int mat){
@@ -203,22 +203,22 @@ vec3 map_normal(const vec3& point){
     );
 }
 
-static const float invRandMax = 2.0f / RAND_MAX;
+constexpr float invRandMax = 2.0f / RAND_MAX;
 
-vec3 randomDir(const vec3& N){
-    vec3 dir;
+vec3 randomDir(const vec3& N, const vec3& rd){
+    vec3 dir, ref = reflect(rd, N);
     do{
         dir.x = rand() * invRandMax - 1.0f;
         dir.y = rand() * invRandMax - 1.0f;
         dir.z = rand() * invRandMax - 1.0f;
-        dir = normalize(dir);
-    }while(dot(dir, N) < 0.0f);
+        dir = normalize(dir + 0.5f * N + 0.5f * ref);
+    }while(dot(dir, N) < 0.01f && dot(dir, ref) < 0.0f);
     return dir;
 }
 
 //https://en.wikipedia.org/wiki/Path_tracing
 vec3 trace(const Ray& ray, int depth){
-    if(depth >= 10)return vec3();
+    if(depth >= 6)return vec3();
     constexpr float e = 0.001f;
     bool hit = false;
     vec3 point = ray.origin;
@@ -238,9 +238,13 @@ vec3 trace(const Ray& ray, int depth){
     if(!hit)return vec3();
     
     const vec3 N = map_normal(point);
-    Ray r2 = {point + N * e, randomDir(N)};
+    Ray r2 = {point + N * e, randomDir(N, ray.direction)};
     float cos_theta = dot(N, r2.direction);
     vec3 brdf = 2.0f * sample.material->reflectance * cos_theta;
+    float energy = brdf.x + brdf.y + brdf.z;
+    if(energy < 0.001f)
+        return sample.material->emittance;
+    
     vec3 reflected = trace(r2, depth + 1);
     
     return sample.material->emittance + (brdf * reflected);
@@ -248,9 +252,11 @@ vec3 trace(const Ray& ray, int depth){
 
 vec3 do_ray(const Ray& ray){
     vec3 out;
-    
-    for(size_t i = 0; i < 30; i++){
-        out = (out + trace(ray, 0)) * 0.5f;
+    int samples = 3000;
+    float b = 1.0f / samples;
+    float a = 1.0f - b;
+    for(int i = 0; i < samples; i++){
+        out = a * out + b * trace(ray, 0);
     }
     
     return clamp(pow(out, 1.0f / 2.2f), 0.0, 1.0f);
@@ -261,7 +267,7 @@ int main(){
     const int32_t width = 1024, height = 1024;
     const float invw2 = 2.0f / width;
     const float invh2 = 2.0f / height;
-    uint8_t* data = new uint8_t[width * height * 3];
+    uint8_t* data = new uint8_t[width * height * 4];
     vec3* image = new vec3[width * height];
     vec3 eye(0.0f, 0.0f, 1.0f);
     
@@ -277,7 +283,7 @@ int main(){
     };
     
     vector<thread> threads;
-    int num_threads = 8;
+    int num_threads = 4;
     int N = (width * height) / num_threads;
     for(int i = 0; i < num_threads; i++){
         int begin = i * N;
@@ -289,14 +295,14 @@ int main(){
         t.join();
     
     for(size_t i = 0; i < width * height; i++){
-        data[i * 3 + 0] = image[i].x * 255;
-        data[i * 3 + 1] = image[i].y * 255;
-        data[i * 3 + 2] = image[i].z * 255;
+        data[i * 4 + 0] = image[i].x * 255;
+        data[i * 4 + 1] = image[i].y * 255;
+        data[i * 4 + 2] = image[i].z * 255;
+        data[i * 4 + 3] = 255;
     }
     
-    if(!tje_encode_to_file("out.jpg", width, height, 3, data)){
-        puts("encoding failed");
-        return 1;
+    if(lodepng_encode32_file("out.png", data, width, height)){
+        puts("Encoding failed!");
     }
     
     delete[] data;
