@@ -67,13 +67,6 @@ vec3 reflect(const vec3& d, const vec3& n){
 #define MIN(a, b) ( ((a) < (b)) ? (a) : (b))
 #define CLAMP(x, lo, hi) (MAX(MIN((x), (hi)), (lo)))
 #define LERP(a, b, alpha) ((1.0f - (alpha)) * (a) + (alpha) * (b))
-vec3 lerp(const vec3& a, const vec3& b, float alpha){
-    return vec3(
-        LERP(a.x, b.x, alpha),
-        LERP(a.y, b.y, alpha),
-        LERP(a.z, b.z, alpha)
-    );
-}
 vec3 clamp(const vec3& x, float lo, float hi){
     return vec3(
         CLAMP(x.x, lo, hi),
@@ -118,6 +111,7 @@ vec3 normalize(const vec3& a){
 struct Material{
     vec3 reflectance;
     vec3 emittance;
+    float roughness;
 };
 
 struct Ray{
@@ -138,11 +132,11 @@ float operator - (const MapSample& a, const MapSample& b){
 }
 
 static Material materials[] = {
-    {vec3(0.9f, 0.9f, 0.9f), vec3(0.0f, 0.0f, 0.0f)}, // white
-    {vec3(0.9f, 0.1f, 0.1f), vec3(0.0f, 0.0f, 0.0f)}, // red
-    {vec3(0.1f, 0.9f, 0.1f), vec3(0.0f, 0.0f, 0.0f)}, // green
-    {vec3(0.1f, 0.1f, 0.9f), vec3(0.0f, 0.0f, 0.0f)}, // blue
-    {vec3(0.0f, 0.0f, 0.0f), vec3(0.9f, 0.9f, 0.9f)} // white light
+    {vec3(0.9f, 0.9f, 0.9f), vec3(0.0f, 0.0f, 0.0f), 0.5f}, // white
+    {vec3(0.9f, 0.1f, 0.1f), vec3(0.0f, 0.0f, 0.0f), 0.0125f}, // red
+    {vec3(0.1f, 0.9f, 0.1f), vec3(0.0f, 0.0f, 0.0f), 0.125f}, // green
+    {vec3(0.1f, 0.1f, 0.9f), vec3(0.0f, 0.0f, 0.0f), 0.25f}, // blue
+    {vec3(0.0f, 0.0f, 0.0f), vec3(0.9f, 0.9f, 0.9f), 0.5f} // white light
 };
 
 MapSample sphere(const vec3& ray, const vec3& location, float radius, int mat){
@@ -150,8 +144,7 @@ MapSample sphere(const vec3& ray, const vec3& location, float radius, int mat){
 }
 
 MapSample box(const vec3& ray, const vec3& location, const vec3& dimension, int mat){
-    vec3 d = abs(ray - location) - dimension;
-    return {&materials[mat], vmax(d)};
+    return {&materials[mat], vmax(abs(ray - location) - dimension)};
 }
 
 MapSample map(const vec3& ray){
@@ -168,11 +161,11 @@ MapSample map(const vec3& ray){
     a = MIN(a, box(ray, // right wall
         vec3(2.0f, 0.0f, 0.0f),
         vec3(0.01f, 2.0f, 2.0f),
-        1));
+        0));
     a = MIN(a, box(ray, // ceiling
         vec3(0.0f, 2.0f, 0.0f),
         vec3(2.0f, 0.01f, 2.0f),
-        2));
+        0));
     a = MIN(a, box(ray, // floor
         vec3(0.0f, -2.0f, 0.0f),
         vec3(2.0f, 0.01f, 2.0f),
@@ -184,7 +177,7 @@ MapSample map(const vec3& ray){
     a = MIN(a, box(ray, // front
         vec3(0.0f, 0.0f, 2.0f),
         vec3(2.0f, 2.0f, 0.01f),
-        1));
+        0));
     return a;
 }
 
@@ -205,20 +198,19 @@ vec3 map_normal(const vec3& point){
 
 constexpr float invRandMax = 2.0f / RAND_MAX;
 
-vec3 randomDir(const vec3& N, const vec3& rd){
-    vec3 dir, ref = reflect(rd, N);
+vec3 randomDir(const vec3& N, const vec3& rd, float roughness){
+    vec3 dir, ref = normalize(reflect(rd, N));
     do{
         dir.x = rand() * invRandMax - 1.0f;
         dir.y = rand() * invRandMax - 1.0f;
         dir.z = rand() * invRandMax - 1.0f;
-        dir = normalize(dir + 0.5f * N + 0.5f * ref);
-    }while(dot(dir, N) < 0.01f && dot(dir, ref) < 0.0f);
-    return dir;
+    }while(dot(dir, N) < 0.0f);
+    return normalize(LERP(ref, normalize(dir), roughness));
 }
 
 //https://en.wikipedia.org/wiki/Path_tracing
 vec3 trace(const Ray& ray, int depth){
-    if(depth >= 6)return vec3();
+    if(depth >= 5)return vec3();
     constexpr float e = 0.001f;
     bool hit = false;
     vec3 point = ray.origin;
@@ -238,7 +230,13 @@ vec3 trace(const Ray& ray, int depth){
     if(!hit)return vec3();
     
     const vec3 N = map_normal(point);
-    Ray r2 = {point + N * e, randomDir(N, ray.direction)};
+    Ray r2 = {
+        point + N * e, 
+        randomDir(
+            N, 
+            ray.direction, 
+            sample.material->roughness)
+        };
     float cos_theta = dot(N, r2.direction);
     vec3 brdf = 2.0f * sample.material->reflectance * cos_theta;
     float energy = brdf.x + brdf.y + brdf.z;
@@ -252,7 +250,7 @@ vec3 trace(const Ray& ray, int depth){
 
 vec3 do_ray(const Ray& ray){
     vec3 out;
-    int samples = 3000;
+    int samples = 5000;
     float b = 1.0f / samples;
     float a = 1.0f - b;
     for(int i = 0; i < samples; i++){
@@ -264,7 +262,7 @@ vec3 do_ray(const Ray& ray){
 
 int main(){
     srand(time(NULL));
-    const int32_t width = 1024, height = 1024;
+    const int32_t width = 2048, height = 2048;
     const float invw2 = 2.0f / width;
     const float invh2 = 2.0f / height;
     uint8_t* data = new uint8_t[width * height * 4];
